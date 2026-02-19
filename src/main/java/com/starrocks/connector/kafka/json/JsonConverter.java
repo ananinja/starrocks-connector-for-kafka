@@ -38,6 +38,11 @@ import org.apache.kafka.connect.storage.StringConverterConfig;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 
@@ -207,6 +212,116 @@ public class JsonConverter implements Converter, HeaderConverter {
                 if (!(value.isIntegralNumber()))
                     throw new DataException("Invalid type for Timestamp, underlying representation should be integral but was " + value.getNodeType());
                 return Timestamp.toLogical(schema, value.longValue());
+            }
+        });
+
+        // Debezium temporal logical types — output human-readable strings for StarRocks compatibility.
+
+        // io.debezium.time.Date: INT32 days since epoch → "yyyy-MM-dd"
+        LOGICAL_CONVERTERS.put("io.debezium.time.Date", new LogicalTypeConverter() {
+            @Override
+            public JsonNode toJson(final Schema schema, final Object value, final JsonConverterConfig config) {
+                return JSON_NODE_FACTORY.textNode(LocalDate.ofEpochDay(((Number) value).longValue()).toString());
+            }
+            @Override
+            public Object toConnect(final Schema schema, final JsonNode value) {
+                if (value.isInt()) return value.intValue();
+                return (int) LocalDate.parse(value.asText()).toEpochDay();
+            }
+        });
+
+        // io.debezium.time.Timestamp: INT64 ms since epoch → "yyyy-MM-dd HH:mm:ss"
+        LOGICAL_CONVERTERS.put("io.debezium.time.Timestamp", new LogicalTypeConverter() {
+            private final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
+            @Override
+            public JsonNode toJson(final Schema schema, final Object value, final JsonConverterConfig config) {
+                return JSON_NODE_FACTORY.textNode(FMT.format(Instant.ofEpochMilli(((Number) value).longValue())));
+            }
+            @Override
+            public Object toConnect(final Schema schema, final JsonNode value) {
+                if (value.isLong() || value.isInt()) return value.longValue();
+                return Instant.parse(value.asText()).toEpochMilli();
+            }
+        });
+
+        // io.debezium.time.MicroTimestamp: INT64 μs since epoch → "yyyy-MM-dd HH:mm:ss.SSSSSS"
+        LOGICAL_CONVERTERS.put("io.debezium.time.MicroTimestamp", new LogicalTypeConverter() {
+            private final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS").withZone(ZoneOffset.UTC);
+            @Override
+            public JsonNode toJson(final Schema schema, final Object value, final JsonConverterConfig config) {
+                long micros = ((Number) value).longValue();
+                return JSON_NODE_FACTORY.textNode(FMT.format(Instant.ofEpochSecond(micros / 1_000_000, (micros % 1_000_000) * 1_000)));
+            }
+            @Override
+            public Object toConnect(final Schema schema, final JsonNode value) {
+                if (value.isLong() || value.isInt()) return value.longValue();
+                return java.time.Duration.between(Instant.EPOCH, Instant.parse(value.asText())).toNanos() / 1_000;
+            }
+        });
+
+        // io.debezium.time.NanoTimestamp: INT64 ns since epoch → "yyyy-MM-dd HH:mm:ss.SSSSSSSSS"
+        LOGICAL_CONVERTERS.put("io.debezium.time.NanoTimestamp", new LogicalTypeConverter() {
+            private final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSSSSS").withZone(ZoneOffset.UTC);
+            @Override
+            public JsonNode toJson(final Schema schema, final Object value, final JsonConverterConfig config) {
+                long nanos = ((Number) value).longValue();
+                return JSON_NODE_FACTORY.textNode(FMT.format(Instant.ofEpochSecond(nanos / 1_000_000_000, nanos % 1_000_000_000)));
+            }
+            @Override
+            public Object toConnect(final Schema schema, final JsonNode value) {
+                if (value.isLong() || value.isInt()) return value.longValue();
+                return java.time.Duration.between(Instant.EPOCH, Instant.parse(value.asText())).toNanos();
+            }
+        });
+
+        // io.debezium.time.ZonedTimestamp: already a STRING (ISO 8601) — pass through as text
+        LOGICAL_CONVERTERS.put("io.debezium.time.ZonedTimestamp", new LogicalTypeConverter() {
+            @Override
+            public JsonNode toJson(final Schema schema, final Object value, final JsonConverterConfig config) {
+                return JSON_NODE_FACTORY.textNode(value.toString());
+            }
+            @Override
+            public Object toConnect(final Schema schema, final JsonNode value) {
+                return value.asText();
+            }
+        });
+
+        // io.debezium.time.Time: INT32 ms since midnight → "HH:mm:ss"
+        LOGICAL_CONVERTERS.put("io.debezium.time.Time", new LogicalTypeConverter() {
+            @Override
+            public JsonNode toJson(final Schema schema, final Object value, final JsonConverterConfig config) {
+                return JSON_NODE_FACTORY.textNode(LocalTime.ofNanoOfDay(((Number) value).longValue() * 1_000_000).toString());
+            }
+            @Override
+            public Object toConnect(final Schema schema, final JsonNode value) {
+                if (value.isInt()) return value.intValue();
+                return (int) (LocalTime.parse(value.asText()).toNanoOfDay() / 1_000_000);
+            }
+        });
+
+        // io.debezium.time.MicroTime: INT64 μs since midnight → "HH:mm:ss.SSSSSS"
+        LOGICAL_CONVERTERS.put("io.debezium.time.MicroTime", new LogicalTypeConverter() {
+            @Override
+            public JsonNode toJson(final Schema schema, final Object value, final JsonConverterConfig config) {
+                return JSON_NODE_FACTORY.textNode(LocalTime.ofNanoOfDay(((Number) value).longValue() * 1_000).toString());
+            }
+            @Override
+            public Object toConnect(final Schema schema, final JsonNode value) {
+                if (value.isLong() || value.isInt()) return value.longValue();
+                return LocalTime.parse(value.asText()).toNanoOfDay() / 1_000;
+            }
+        });
+
+        // io.debezium.time.NanoTime: INT64 ns since midnight → "HH:mm:ss.SSSSSSSSS"
+        LOGICAL_CONVERTERS.put("io.debezium.time.NanoTime", new LogicalTypeConverter() {
+            @Override
+            public JsonNode toJson(final Schema schema, final Object value, final JsonConverterConfig config) {
+                return JSON_NODE_FACTORY.textNode(LocalTime.ofNanoOfDay(((Number) value).longValue()).toString());
+            }
+            @Override
+            public Object toConnect(final Schema schema, final JsonNode value) {
+                if (value.isLong() || value.isInt()) return value.longValue();
+                return LocalTime.parse(value.asText()).toNanoOfDay();
             }
         });
     }
