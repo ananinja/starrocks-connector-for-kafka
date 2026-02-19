@@ -36,6 +36,7 @@ import org.apache.kafka.connect.transforms.Transformation;
 import org.apache.kafka.connect.transforms.util.SchemaUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.HashMap;
 import java.util.Map;
 
 // This class is a transform class that users use when they need load debezium data and SR's table model is PK.
@@ -59,10 +60,18 @@ public class AddOpFieldForDebeziumRecord<R extends ConnectRecord<R>> implements 
     private Cache<Schema, Schema> schemaUpdateCache;
 
     @Override
+    @SuppressWarnings("unchecked")
     public R apply(R record) {
         if (record.value() == null) {
             return record;
         }
+
+        // Schemaless path: value is a Map (when schemas.enable=false)
+        if (record.value() instanceof Map) {
+            return applySchemaless(record);
+        }
+
+        // Schema path: value is a Struct (when schemas.enable=true)
         if (!smtManager.isValidEnvelope(record)) {
             return record;
         }
@@ -92,6 +101,34 @@ public class AddOpFieldForDebeziumRecord<R extends ConnectRecord<R>> implements 
                 return record.newRecord(record.topic(), record.kafkaPartition(), record.keySchema(), record.key(), newValue.schema(), newValue, record.timestamp());
             }
         } catch (Exception e) {
+            return record;
+        }
+        return record;
+    }
+
+    @SuppressWarnings("unchecked")
+    private R applySchemaless(R record) {
+        Map<String, Object> value = (Map<String, Object>) record.value();
+        String op = (String) value.get(OP);
+        if (op == null) {
+            return record;
+        }
+        try {
+            if (op.equals(OP_C) || op.equals(OP_U)) {
+                Map<String, Object> after = (Map<String, Object>) value.get(AFTER);
+                if (after == null) return record;
+                Map<String, Object> newValue = new HashMap<>(after);
+                newValue.put(OP_FIELD_NAME, 0);
+                return record.newRecord(record.topic(), record.kafkaPartition(), record.keySchema(), record.key(), null, newValue, record.timestamp());
+            } else if (op.equals(OP_D)) {
+                Map<String, Object> before = (Map<String, Object>) value.get(BEFORE);
+                if (before == null) return record;
+                Map<String, Object> newValue = new HashMap<>(before);
+                newValue.put(OP_FIELD_NAME, 1);
+                return record.newRecord(record.topic(), record.kafkaPartition(), record.keySchema(), record.key(), null, newValue, record.timestamp());
+            }
+        } catch (Exception e) {
+            LOG.error("Failed to apply schemaless transform", e);
             return record;
         }
         return record;
