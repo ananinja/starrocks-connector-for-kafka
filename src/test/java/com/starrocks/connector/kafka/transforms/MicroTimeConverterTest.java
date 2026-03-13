@@ -143,13 +143,14 @@ public class MicroTimeConverterTest {
     @Test
     public void integerValueAlsoConverted() {
         // io.debezium.time.MicroTime may arrive as Integer in some edge cases
+        // 1800000000 µs = 1800 s = 00:30:00  (fits within Integer.MAX_VALUE = 2147483647)
         Map<String, Object> value = new HashMap<>();
-        value.put("start_at", 3600000000);  // int: 01:00:00
+        value.put("start_at", 1800000000);  // int: 00:30:00
 
         MicroTimeConverter<SinkRecord> smt = configure("start_at");
         SinkRecord result = smt.apply(recordWithMap(value));
 
         Map<?, ?> resultValue = (Map<?, ?>) result.value();
-        Assert.assertEquals("01:00:00", resultValue.get("start_at"));
+        Assert.assertEquals("00:30:00", resultValue.get("start_at"));
     }
 }
